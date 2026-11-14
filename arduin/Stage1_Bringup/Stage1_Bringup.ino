@@ -26,7 +26,7 @@ const float STILL_RANGE = 1.0f;    // dps
 const float BIAS_RATE   = 0.2f;
 
 // ---------- Auto-centering ----------
-const float DEAD_ZONE_DEG = 0.0f;  // auto-centering now handled by the bridge
+const float DEAD_ZONE_DEG = 5.0f;  // auto-centering now handled by the bridge
 const float RECENTER_RATE = 0.2f;  // fraction of the error corrected each still second
 
 // ---------- State ----------
