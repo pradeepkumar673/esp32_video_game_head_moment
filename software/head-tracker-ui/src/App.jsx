@@ -6,19 +6,22 @@ import Diagnostics from './Diagnostics';
 
 const RANGE = 90;
 
-function Axis({ label, value }) {
+function PixelAxis({ label, value }) {
   const pct = Math.max(-1, Math.min(1, value / RANGE)) * 50;
   return (
     <div className="axis">
       <div className="axis-head">
-        <span className="label">{label}</span>
-        <span className="value">{value >= 0 ? '+' : ''}{value.toFixed(1)}°</span>
+        <span className="axis-label">{label}</span>
+        <span className="axis-value">{value >= 0 ? '+' : ''}{value.toFixed(1)}°</span>
       </div>
-      <div className="track">
-        <div className="center" />
+      <div className="px-track">
+        <div className="px-center" />
         <div
-          className="fill"
-          style={{ left: pct < 0 ? `${50 + pct}%` : '50%', width: `${Math.abs(pct)}%` }}
+          className="px-fill"
+          style={{
+            left: pct < 0 ? `${50 + pct}%` : '50%',
+            width: `${Math.abs(pct)}%`,
+          }}
         />
       </div>
     </div>
@@ -33,86 +36,92 @@ export default function App() {
   const fresh = deviceLive && tracking.staleMs < 500;
 
   let state = 'off';
-  let label = 'Bridge offline';
-  if (bridge.online && !deviceLive) { state = 'warn'; label = 'Device disconnected'; }
-  if (deviceLive && !fresh) { state = 'warn'; label = 'Stale data'; }
-  if (fresh) { state = 'on'; label = 'Live'; }
+  let statusLabel = 'Bridge offline';
+  if (bridge.online && !deviceLive) { state = 'warn'; statusLabel = 'Device disconnected'; }
+  if (deviceLive && !fresh) { state = 'warn'; statusLabel = 'Stale data'; }
+  if (fresh) { state = 'on'; statusLabel = 'Live'; }
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">Head Tracker <span>studio</span></div>
+        <div className="brand">HEAD TRACKER <span>[STUDIO]</span></div>
         <nav className="tabs">
           <button
             className={view === 'studio' ? 'tab active' : 'tab'}
             onClick={() => setView('studio')}
-          >
-            Studio
-          </button>
+          >STUDIO</button>
           <button
             className={view === 'diag' ? 'tab active' : 'tab'}
             onClick={() => setView('diag')}
-          >
-            Diagnostics
-          </button>
+          >DIAGNOSTICS</button>
         </nav>
         <div className="status">
-          <span className={`dot ${state}`} />
-          {label}
+          <span className={`pxdot ${state}`} />
+          <span style={{ fontFamily: "'Silkscreen', monospace", fontSize: 12 }}>{statusLabel}</span>
         </div>
       </header>
 
       {view === 'studio' ? (
         <main className="layout">
-          <section className="panel stage">
-            <Head3D yaw={tracking.yaw} pitch={tracking.pitch} roll={tracking.roll} />
-          </section>
+          {/* 3D Stage */}
+          <div className="stage-wrap" style={{ height: 680 }}>
+            <div className="stage-grid" />
+            <div className="stage-canvas" style={{ height: '100%' }}>
+              <Head3D yaw={tracking.yaw} pitch={tracking.pitch} roll={tracking.roll} />
+            </div>
+          </div>
 
+          {/* Right column */}
           <div className="side">
-            <section className="panel">
-              <h2>Orientation</h2>
-              <Axis label="Yaw" value={tracking.yaw} />
-              <Axis label="Pitch" value={tracking.pitch} />
-              <Axis label="Roll" value={tracking.roll} />
-              <button className="primary" onClick={actions.recenter} disabled={!fresh}>
+            {/* Orientation */}
+            <div className="px-panel">
+              <div className="px-panel-header">
+                <h2 className="px-title">Orientation</h2>
+                <span className={`px-badge ${state}`}>{statusLabel}</span>
+              </div>
+              <PixelAxis label="Yaw" value={tracking.yaw} />
+              <PixelAxis label="Pitch" value={tracking.pitch} />
+              <PixelAxis label="Roll" value={tracking.roll} />
+              <button className="px-primary" onClick={actions.recenter} disabled={!fresh}>
                 Recenter
               </button>
-              <p className="hint">Look straight ahead, then press Recenter to set that as the center.</p>
-            </section>
+              <p className="hint-text" style={{ marginTop: 10 }}>Look straight ahead, then press Recenter.</p>
+            </div>
 
-            <section className="panel">
-              <h2>Device</h2>
-              <dl>
+            {/* Device */}
+            <div className="px-panel">
+              <div className="px-panel-header">
+                <h2 className="px-title">Device</h2>
+              </div>
+              <dl className="data-grid">
                 <dt>Port</dt><dd>{bridge.port || '—'}</dd>
                 <dt>Rate</dt><dd>{tracking.rate} Hz</dd>
                 <dt>Frames</dt><dd>{bridge.frames ?? 0}</dd>
                 <dt>Sent to OpenTrack</dt><dd>{bridge.sent ?? 0}</dd>
                 <dt>Bad checksums</dt><dd>{bridge.badChecksum ?? 0}</dd>
               </dl>
-            </section>
+            </div>
 
             <Settings config={config} profiles={profiles} actions={actions} />
 
-            <section className="panel">
-              <h2>Events</h2>
-              {events.length === 0 && <p className="hint">No events yet.</p>}
-              <ul>
-                {events.map((e, i) => <li key={i}>{e}</li>)}
-              </ul>
-            </section>
+            {/* Events */}
+            <div className="px-panel">
+              <div className="px-panel-header">
+                <h2 className="px-title">Events</h2>
+              </div>
+              <div className="events-box">
+                {events.length === 0
+                  ? <p className="hint-text">No events yet.</p>
+                  : events.map((e, i) => (
+                      <div key={i} className="event-item" style={{ color: i === 0 ? '#4FC3E8' : '#9BCB3C' }}>{e}</div>
+                    ))
+                }
+              </div>
+            </div>
           </div>
         </main>
       ) : (
-        <main className="layout-diag">
-          <Diagnostics tracking={tracking} bridge={bridge} actions={actions} />
-          <section className="panel">
-            <h2>Events</h2>
-            {events.length === 0 && <p className="hint">No events yet.</p>}
-            <ul>
-              {events.map((e, i) => <li key={i}>{e}</li>)}
-            </ul>
-          </section>
-        </main>
+        <Diagnostics tracking={tracking} bridge={bridge} actions={actions} events={events} />
       )}
     </div>
   );

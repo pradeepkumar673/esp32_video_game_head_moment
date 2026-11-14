@@ -9,8 +9,8 @@ const DEG = Math.PI / 180;
 const FLIP = { yaw: -1, pitch: -1, roll: -1 };
 
 // Camera settings: the head's bounding sphere fills about 80% of the frame height.
-const FOV = 70;
-const MARGIN = 1.15;
+const FOV = 50;
+const MARGIN = 1.5;
 
 function HeadModel({ yaw, pitch, roll }) {
   const { scene } = useGLTF('/models/head.glb');
