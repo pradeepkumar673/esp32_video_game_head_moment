@@ -96,7 +96,7 @@ function sendToOpenTrack(yaw, pitch, roll) {
   sent++;
 }
 
-// ---------- Tracking math (unchanged from the verified version) ----------
+// ---------- Tracking math ----------
 function isStill() {
   return ['yaw', 'pitch', 'roll'].every((k) => {
     const vals = history.map((f) => f[k]);
@@ -145,7 +145,7 @@ function onFrame(raw) {
 
   if (frames % 50 === 0) {
     log(
-      `out yaw=${out.yaw.toFixed(1).padStart(7)}  pitch=${pitch.toFixed(1).padStart(7)}  ` +
+      `out yaw=${out.yaw.toFixed(1).padStart(7)}  pitch=${out.pitch.toFixed(1).padStart(7)}  ` +
       `roll=${out.roll.toFixed(1).padStart(7)}  sent=${sent}  badChecksum=${badChecksum}`
     );
   }
