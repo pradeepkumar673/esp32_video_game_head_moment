@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const URL = 'ws://localhost:8787';
 
@@ -6,6 +6,8 @@ export function useTracker() {
   const [tracking, setTracking] = useState({ yaw: 0, pitch: 0, roll: 0, rate: 0, staleMs: 0, connected: false });
   const [bridge, setBridge] = useState({ online: false, port: '', frames: 0, sent: 0, badChecksum: 0 });
   const [events, setEvents] = useState([]);
+  const [config, setConfig] = useState(null);
+  const [profiles, setProfiles] = useState([]);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -20,12 +22,23 @@ export function useTracker() {
 
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
-        if (msg.type === 'tracking') {
-          setTracking(msg);
-        } else if (msg.type === 'status') {
-          setBridge((b) => ({ ...b, ...msg, online: true }));
-        } else if (msg.type === 'device' || msg.type === 'event') {
-          setEvents((ev) => [msg.text, ...ev].slice(0, 8));
+        switch (msg.type) {
+          case 'tracking':
+            setTracking(msg);
+            break;
+          case 'status':
+            setBridge((b) => ({ ...b, ...msg, online: true }));
+            break;
+          case 'config':
+            setConfig(msg.cfg);
+            break;
+          case 'profiles':
+            setProfiles(msg.names);
+            break;
+          case 'device':
+          case 'event':
+            setEvents((ev) => [msg.text, ...ev].slice(0, 8));
+            break;
         }
       };
 
@@ -44,12 +57,19 @@ export function useTracker() {
     };
   }, []);
 
-  const recenter = () => {
-    if (wsRef.current && wsRef.current.readyState === 1) {
-      wsRef.current.send(JSON.stringify({ type: 'command', name: 'recenter' }));
-    }
+  const send = useCallback((obj) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }, []);
+
+  const actions = {
+    recenter: () => send({ type: 'command', name: 'recenter' }),
+    calibrate: () => send({ type: 'command', name: 'calibrate' }),
+    setConfig: (values) => send({ type: 'setConfig', values }),
+    resetDefaults: () => send({ type: 'resetDefaults' }),
+    saveProfile: (name) => send({ type: 'saveProfile', name }),
+    loadProfile: (name) => send({ type: 'loadProfile', name }),
   };
 
-  return { tracking, bridge, events, recenter };
+  return { tracking, bridge, events, config, profiles, actions };
 }
-

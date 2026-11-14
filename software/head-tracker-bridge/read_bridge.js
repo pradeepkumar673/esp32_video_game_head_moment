@@ -11,6 +11,11 @@ const UDP_PORT = 4242;
 const WS_PORT = 8787;
 const RECONNECT_MS = 2000;
 const BROADCAST_MS = 50;
+const STATUS_MS = 1000;
+
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+const PROFILE_DIR = path.join(__dirname, 'profiles');
+fs.mkdirSync(PROFILE_DIR, { recursive: true });
 
 const DEFAULTS = {
   autoCenter: false,
@@ -19,9 +24,15 @@ const DEFAULTS = {
   stillRangeDeg: 0.5,
 };
 
+const LIMITS = {
+  deadZoneDeg: [0, 20],
+  centerRate: [0, 1],
+  stillRangeDeg: [0.1, 3],
+};
+
 let cfg = { ...DEFAULTS };
 try {
-  const user = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+  const user = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   cfg = { ...DEFAULTS, ...user };
   console.log('Loaded config.json');
 } catch (e) {
@@ -36,14 +47,50 @@ let center = null;
 let history = [];
 let lastRaw = null;
 let out = { yaw: 0, pitch: 0, roll: 0 };
-let frames = 0, sent = 0, badChecksum = 0;
+let frames = 0, sent = 0, badChecksum = 0, udpErrors = 0;
 let lastFrameAt = 0;
 let rate = 0, rateCount = 0;
 let connected = false;
 let retryPending = false;
 let serial = null;
+let deviceBias = null;      // { gx, gy, gz, tempC } from the ESP32
+let lastDeviceLine = '';
 
 function log(msg) { console.log(msg); }
+
+// ---------- Settings ----------
+function saveConfig() {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2));
+}
+
+function applyValues(values) {
+  if (typeof values.autoCenter === 'boolean') cfg.autoCenter = values.autoCenter;
+  for (const [key, [min, max]] of Object.entries(LIMITS)) {
+    const v = values[key];
+    if (typeof v === 'number' && Number.isFinite(v)) {
+      cfg[key] = Math.min(max, Math.max(min, v));
+    }
+  }
+  saveConfig();
+  broadcast({ type: 'config', cfg });
+}
+
+// ---------- Profiles ----------
+function profilePath(name) {
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) return null;
+  return path.join(PROFILE_DIR, name + '.json');
+}
+
+function listProfiles() {
+  return fs.readdirSync(PROFILE_DIR)
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => f.slice(0, -5))
+    .sort();
+}
+
+function sendProfiles() {
+  broadcast({ type: 'profiles', names: listProfiles() });
+}
 
 // ---------- WebSocket to the browser ----------
 function broadcast(obj) {
@@ -54,17 +101,76 @@ function broadcast(obj) {
 }
 
 function statusMessage() {
-  return { type: 'status', connected, port: PORT_PATH, frames, sent, badChecksum };
+  return {
+    type: 'status',
+    connected,
+    port: PORT_PATH,
+    frames,
+    sent,
+    badChecksum,
+    udpErrors,
+    deviceBias,
+    lastDeviceLine,
+  };
 }
 
 wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'config', cfg }));
   ws.send(JSON.stringify(statusMessage()));
+  ws.send(JSON.stringify({ type: 'profiles', names: listProfiles() }));
 
   ws.on('message', (data) => {
     let msg;
     try { msg = JSON.parse(data.toString()); } catch (e) { return; }
-    if (msg.type === 'command' && msg.name === 'recenter') recenter();
+
+    try {
+      switch (msg.type) {
+        case 'command':
+          if (msg.name === 'recenter') recenter();
+          if (msg.name === 'calibrate') calibrateDevice();
+          break;
+
+        case 'setConfig':
+          applyValues(msg.values || {});
+          break;
+
+        case 'resetDefaults':
+          cfg = { ...DEFAULTS };
+          saveConfig();
+          broadcast({ type: 'config', cfg });
+          broadcast({ type: 'event', text: 'Settings reset to defaults' });
+          break;
+
+        case 'saveProfile': {
+          const p = profilePath(msg.name || '');
+          if (!p) {
+            broadcast({ type: 'event', text: 'Profile names: letters, numbers, - and _ only' });
+            break;
+          }
+          fs.writeFileSync(p, JSON.stringify(cfg, null, 2));
+          sendProfiles();
+          broadcast({ type: 'event', text: `Saved profile "${msg.name}"` });
+          break;
+        }
+
+        case 'loadProfile': {
+          const p = profilePath(msg.name || '');
+          if (!p || !fs.existsSync(p)) {
+            broadcast({ type: 'event', text: `Profile not found: ${msg.name}` });
+            break;
+          }
+          applyValues(JSON.parse(fs.readFileSync(p, 'utf8')));
+          broadcast({ type: 'event', text: `Loaded profile "${msg.name}"` });
+          break;
+        }
+
+        case 'listProfiles':
+          sendProfiles();
+          break;
+      }
+    } catch (err) {
+      broadcast({ type: 'event', text: 'Command failed: ' + err.message });
+    }
   });
 });
 
@@ -81,6 +187,8 @@ setInterval(() => {
   });
 }, BROADCAST_MS);
 
+setInterval(() => broadcast(statusMessage()), STATUS_MS);
+
 // ---------- OpenTrack output ----------
 function sendToOpenTrack(yaw, pitch, roll) {
   const buf = Buffer.alloc(48);
@@ -91,7 +199,10 @@ function sendToOpenTrack(yaw, pitch, roll) {
   buf.writeDoubleLE(pitch, 32);
   buf.writeDoubleLE(roll, 40);
   udp.send(buf, UDP_PORT, UDP_HOST, (err) => {
-    if (err) log('UDP error: ' + err.message);
+    if (err) {
+      udpErrors++;
+      log('UDP error: ' + err.message);
+    }
   });
   sent++;
 }
@@ -156,6 +267,30 @@ setInterval(() => {
   rateCount = 0;
 }, 1000);
 
+// ---------- Device messages ----------
+function parseDeviceBias(line) {
+  const m = line.match(/gx=([+-]?\d+\.\d+) gy=([+-]?\d+\.\d+) gz=([+-]?\d+\.\d+)/);
+  if (!m) return;
+  const t = line.match(/(?:T=|temp=)([+-]?\d+\.\d+)C/);
+  deviceBias = {
+    gx: parseFloat(m[1]),
+    gy: parseFloat(m[2]),
+    gz: parseFloat(m[3]),
+    tempC: t ? parseFloat(t[1]) : null,
+  };
+}
+
+function calibrateDevice() {
+  if (!serial || !serial.isOpen) {
+    broadcast({ type: 'event', text: 'Device not connected' });
+    return;
+  }
+  serial.write('c');
+  center = null;   // re-zero on the next frame after calibration
+  log('Calibration requested.');
+  broadcast({ type: 'event', text: 'Calibrating. Keep the glasses still for 10 seconds.' });
+}
+
 // ---------- Frame parsing ----------
 function parseFrame(line) {
   const star = line.lastIndexOf('*');
@@ -196,6 +331,8 @@ function openSerial() {
       const line = raw.trim();
       if (line.startsWith('#')) {
         log(line);
+        lastDeviceLine = line;
+        parseDeviceBias(line);
         broadcast({ type: 'device', text: line.slice(2) });
         return;
       }

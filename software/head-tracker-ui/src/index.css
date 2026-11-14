@@ -85,3 +85,60 @@ ul { margin: 0; padding-left: 18px; font-size: 14px; line-height: 1.7; }
   .stage { height: 420px; }
   .app { padding: 0 16px 24px; }
 }
+
+
+h2.sub { margin-top: 28px; }
+.field { margin-bottom: 22px; }
+.field-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.value.small { font-size: 18px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.toggle { display: flex; align-items: center; gap: 10px; margin-bottom: 24px; cursor: pointer; }
+.toggle em { color: var(--muted); font-style: normal; }
+button.ghost {
+  background: transparent; color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 10px 18px; font: 600 14px 'Urbanist', sans-serif; cursor: pointer;
+}
+button.small { padding: 8px 14px; font-size: 14px; }
+.profile-save { display: flex; gap: 10px; margin-bottom: 16px; }
+.profile-save input {
+  flex: 1; background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 8px 12px; font: 14px 'Urbanist', sans-serif;
+}
+.profile-save button { margin-top: 0; }
+.profiles { list-style: none; padding: 0; margin: 0; }
+.profiles li {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 0; border-bottom: 1px solid var(--line);
+}
+
+
+.topbar { position: relative; }
+.tabs { display: flex; gap: 6px; }
+.tab {
+  background: transparent; color: var(--muted);
+  border: 1px solid transparent; border-radius: 4px;
+  padding: 8px 14px; font: 600 14px 'Urbanist', sans-serif; cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-color: var(--line); background: var(--panel); }
+
+.layout-diag {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin-top: 24px;
+  align-items: start;
+}
+.diag { display: contents; }
+.check { display: flex; gap: 14px; align-items: flex-start; margin-bottom: 18px; }
+.check .dot { margin-top: 6px; }
+.check-label { font-family: 'Space Grotesk', sans-serif; font-size: 16px; }
+.mono { font-family: Consolas, 'Courier New', monospace; font-size: 12px; word-break: break-all; }
+.steps { color: var(--muted); padding-left: 20px; line-height: 1.9; margin: 0; }
+
+@media (max-width: 800px) {
+  .layout-diag { grid-template-columns: 1fr; }
+  .tabs { display: none; }
+}

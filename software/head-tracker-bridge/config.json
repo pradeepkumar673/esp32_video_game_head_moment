@@ -1,7 +1,6 @@
 {
   "autoCenter": false,
-  "deadZoneDeg": 5,
+  "deadZoneDeg": 6,
   "centerRate": 0.2,
   "stillRangeDeg": 0.5
 }
-
