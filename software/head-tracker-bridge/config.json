@@ -3,7 +3,7 @@
   "deadZoneDeg": 6,
   "centerRate": 0.35,
   "stillRangeDeg": 3,
-  "yawGain": 1.5,
+  "yawGain": 2.0,
   "pitchGain": 1.0,
   "rollGain": 1.0
 }
