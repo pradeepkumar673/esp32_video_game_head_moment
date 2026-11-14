@@ -12,35 +12,46 @@ const float SIGN_YAW   = -1.0f;
 const float SIGN_PITCH = -1.0f;
 const float SIGN_ROLL  = +1.0f;
 
-// ---------- Timing and filter ----------
-const uint32_t SAMPLE_US    = 5000;   // 200 Hz sampling
-const uint32_t STREAM_EVERY = 4;      // send every 4th sample = 50 Hz
+// ---------- Timing ----------
+const uint32_t SAMPLE_US    = 5000;    // 200 Hz sampling
+const uint32_t STREAM_EVERY = 4;       // 50 Hz output
 const float    DT           = SAMPLE_US * 1e-6f;
-const float    GYRO_W       = 0.98f;
-const float    ACC_W        = 0.02f;
-const uint32_t CAL_MS       = 10000;
+const uint32_t WARMUP_MS    = 180000;  // 3 minutes at rest before calibrating
+const uint32_t CAL_MS       = 10000;   // 10 seconds of calibration
 
-// ---------- Stillness-based bias tracking ----------
-const int   WIN_SAMPLES = 200;     // 1 second window
-const float STILL_RANGE = 1.0f;    // dps
-const float BIAS_RATE   = 0.2f;
+// ---------- Filter ----------
+const float GYRO_W = 0.98f;
+const float ACC_W  = 0.02f;
 
-// ---------- Auto-centering ----------
-const float DEAD_ZONE_DEG = 5.0f;  // auto-centering now handled by the bridge
-const float RECENTER_RATE = 0.2f;  // fraction of the error corrected each still second
+// ---------- Still detection ----------
+const int   WIN_SAMPLES = 200;   // 1-second windows
+const float STILL_RANGE = 1.0f;  // dps swing allowed per axis
+
+// ---------- Temperature model ----------
+const double LAMBDA       = 0.995;  // forget old still points (about 200 s)
+const double MIN_TEMP_VAR = 0.05;   // degC^2 of temperature spread needed to trust the slope
+const double MAX_SLOPE    = 0.1;    // dps per degC sanity limit
+
+// ---------- Auto-centering (firmware) ----------
+const float DEAD_ZONE_DEG = 5.0f;
+const float RECENTER_RATE = 0.2f;
 
 // ---------- State ----------
-float bias[3] = {0, 0, 0};
+float tRef = 0;                // reference temperature for the model
+float b0[3] = {0, 0, 0};       // bias at tRef: gx, gy, gz
+float kSlope[3] = {0, 0, 0};   // bias change per degC
+float tempNow = 0;
+
+double S1 = 0, ST = 0, STT = 0;          // decayed sums for the fit
+double Sg[3] = {0, 0, 0}, STg[3] = {0, 0, 0};
+
 float yaw = 0, pitch = 0, roll = 0;
 float yawOff = 0, pitchOff = 0, rollOff = 0;
-uint32_t nextUs = 0;
-uint32_t sampleN = 0;
-uint32_t seq = 0;
-uint32_t i2cErrors = 0;
+uint32_t nextUs = 0, sampleN = 0, seq = 0, i2cErrors = 0;
 
 float wSum[3], wMin[3], wMax[3];
-float wAccSum = 0;
-int   wCount  = 0;
+float wTempSum = 0, wAccSum = 0;
+int   wCount = 0;
 
 // ---------- I2C ----------
 bool writeReg(uint8_t reg, uint8_t value) {
@@ -59,12 +70,14 @@ bool readRegs(uint8_t reg, uint8_t *buf, uint8_t len) {
   return true;
 }
 
-bool readSample(float acc[3], float gyr[3]) {
+// Reads accel, gyro and die temperature in one burst.
+bool readSample(float acc[3], float gyr[3], float &tempC) {
   uint8_t raw[14];
   if (!readRegs(0x3B, raw, 14)) return false;
   int16_t ax = (int16_t)((raw[0]  << 8) | raw[1]);
   int16_t ay = (int16_t)((raw[2]  << 8) | raw[3]);
   int16_t az = (int16_t)((raw[4]  << 8) | raw[5]);
+  int16_t tr = (int16_t)((raw[6]  << 8) | raw[7]);
   int16_t gx = (int16_t)((raw[8]  << 8) | raw[9]);
   int16_t gy = (int16_t)((raw[10] << 8) | raw[11]);
   int16_t gz = (int16_t)((raw[12] << 8) | raw[13]);
@@ -74,14 +87,60 @@ bool readSample(float acc[3], float gyr[3]) {
   gyr[0] = gx / GYRO_LSB_PER_DPS;
   gyr[1] = gy / GYRO_LSB_PER_DPS;
   gyr[2] = gz / GYRO_LSB_PER_DPS;
+  tempC  = tr / 340.0f + 36.53f;
   return true;
+}
+
+// Bias at the current temperature
+float biasAt(int i) {
+  return b0[i] + kSlope[i] * (tempNow - tRef);
+}
+
+// ---------- Temperature model ----------
+void fitModel() {
+  if (S1 < 1e-6) return;
+  double mT  = ST / S1;
+  double var = STT / S1 - mT * mT;
+  for (int i = 0; i < 3; i++) {
+    double mg = Sg[i] / S1;
+    if (var > MIN_TEMP_VAR) {
+      double cov = STg[i] / S1 - mT * mg;
+      double k = cov / var;
+      if (k >  MAX_SLOPE) k =  MAX_SLOPE;
+      if (k < -MAX_SLOPE) k = -MAX_SLOPE;
+      kSlope[i] = (float)k;
+    }
+    b0[i] = (float)(mg - kSlope[i] * mT);
+  }
+}
+
+void addStillPoint(const float gm[3], float tm) {
+  double tc = tm - tRef;
+  S1  = LAMBDA * S1 + 1.0;
+  ST  = LAMBDA * ST + tc;
+  STT = LAMBDA * STT + tc * tc;
+  for (int i = 0; i < 3; i++) {
+    Sg[i]  = LAMBDA * Sg[i]  + gm[i];
+    STg[i] = LAMBDA * STg[i] + tc * gm[i];
+  }
+  fitModel();
+}
+
+void seedModel(const float gm[3], float tm) {
+  tRef = tm;
+  S1 = ST = STT = 0;
+  for (int i = 0; i < 3; i++) {
+    Sg[i] = STg[i] = 0;
+    kSlope[i] = 0;
+  }
+  addStillPoint(gm, tm);
 }
 
 // ---------- Filter ----------
 void integrate(const float a[3], const float g[3]) {
-  yaw   += SIGN_YAW   * (g[0] - bias[0]) * DT;
-  pitch += SIGN_PITCH * (g[2] - bias[2]) * DT;
-  roll  += SIGN_ROLL  * (g[1] - bias[1]) * DT;
+  yaw   += SIGN_YAW   * (g[0] - biasAt(0)) * DT;
+  pitch += SIGN_PITCH * (g[2] - biasAt(2)) * DT;
+  roll  += SIGN_ROLL  * (g[1] - biasAt(1)) * DT;
 
   float aMag = sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
   if (fabsf(aMag - 1.0f) < 0.15f) {
@@ -92,24 +151,26 @@ void integrate(const float a[3], const float g[3]) {
   }
 }
 
-// ---------- Stillness tracking and auto-centering ----------
+// ---------- Still windows: learn bias and auto-center ----------
 void resetWindow() {
   for (int i = 0; i < 3; i++) {
     wSum[i] = 0;
     wMin[i] = 1e9f;
     wMax[i] = -1e9f;
   }
+  wTempSum = 0;
   wAccSum = 0;
   wCount = 0;
 }
 
-void updateBias(const float a[3], const float g[3]) {
+void updateWindow(const float a[3], const float g[3], float T) {
   for (int i = 0; i < 3; i++) {
     wSum[i] += g[i];
     if (g[i] < wMin[i]) wMin[i] = g[i];
     if (g[i] > wMax[i]) wMax[i] = g[i];
   }
-  wAccSum += sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+  wTempSum += T;
+  wAccSum  += sqrtf(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
   wCount++;
 
   if (wCount < WIN_SAMPLES) return;
@@ -118,21 +179,14 @@ void updateBias(const float a[3], const float g[3]) {
   for (int i = 0; i < 3; i++) {
     if (wMax[i] - wMin[i] > STILL_RANGE) still = false;
   }
-  float accMean = wAccSum / wCount;
-  if (fabsf(accMean - 1.0f) > 0.03f) still = false;
+  if (fabsf(wAccSum / wCount - 1.0f) > 0.03f) still = false;
 
   if (still) {
-    // 1. Refine the gyro bias
-    for (int i = 0; i < 3; i++) {
-      float m = wSum[i] / wCount;
-      bias[i] += BIAS_RATE * (m - bias[i]);
-    }
+    float gm[3];
+    for (int i = 0; i < 3; i++) gm[i] = wSum[i] / wCount;
+    addStillPoint(gm, wTempSum / wCount);
 
-    // 2. If the head is still and near center, move the center to where it is.
-    //    Drift is removed. Looking more than 5 degrees away is left alone.
-    float ry = yaw   - yawOff;
-    float rp = pitch - pitchOff;
-    float rr = roll  - rollOff;
+    float ry = yaw - yawOff, rp = pitch - pitchOff, rr = roll - rollOff;
     if (fabsf(ry) < DEAD_ZONE_DEG && fabsf(rp) < DEAD_ZONE_DEG && fabsf(rr) < DEAD_ZONE_DEG) {
       yawOff   += RECENTER_RATE * ry;
       pitchOff += RECENTER_RATE * rp;
@@ -142,10 +196,26 @@ void updateBias(const float a[3], const float g[3]) {
   resetWindow();
 }
 
-// ---------- Calibration (startup and 'c') ----------
+// ---------- Warm-up and calibration ----------
+void warmUp() {
+  Serial.println("# WARM-UP: leave the glasses resting on the desk for 3 minutes");
+  uint32_t t0 = millis();
+  uint32_t lastMsg = t0;
+  while (millis() - t0 < WARMUP_MS) {
+    delay(1000);
+    if (millis() - lastMsg >= 30000) {
+      lastMsg = millis();
+      float a[3], g[3], T = 0;
+      if (readSample(a, g, T)) {
+        Serial.printf("# warm-up %lu s  temp=%.1f C\n", (unsigned long)((millis() - t0) / 1000), T);
+      }
+    }
+  }
+}
+
 void calibrate() {
-  Serial.println("# CALIBRATING: keep your head still for 10 seconds");
-  double gSum[3] = {0, 0, 0}, aSum[3] = {0, 0, 0};
+  Serial.println("# CALIBRATING: keep the glasses still for 10 seconds");
+  double gSum[3] = {0, 0, 0}, aSum[3] = {0, 0, 0}, tSum = 0;
   long n = 0;
   uint32_t t0 = millis();
   nextUs = micros();
@@ -153,24 +223,35 @@ void calibrate() {
     uint32_t nowUs = micros();
     if ((int32_t)(nowUs - nextUs) < 0) continue;
     nextUs += SAMPLE_US;
-    float a[3], g[3];
-    if (!readSample(a, g)) continue;
+    float a[3], g[3], T = 0;
+    if (!readSample(a, g, T)) continue;
     for (int i = 0; i < 3; i++) { gSum[i] += g[i]; aSum[i] += a[i]; }
+    tSum += T;
     n++;
   }
   if (n < 100) {
     Serial.println("# CALIBRATION FAILED: too few samples. Check wiring.");
     return;
   }
-  for (int i = 0; i < 3; i++) bias[i] = gSum[i] / n;
-  float ax = aSum[0] / n, ay = aSum[1] / n, az = aSum[2] / n;
+
+  float gm[3], am[3];
+  for (int i = 0; i < 3; i++) {
+    gm[i] = gSum[i] / n;
+    am[i] = aSum[i] / n;
+  }
+  float tm = tSum / n;
+
+  seedModel(gm, tm);
+  tempNow = tm;
+
   yaw = 0;
-  pitch = SIGN_PITCH * atan2f(ay, ax) * RAD2DEG;
-  roll  = SIGN_ROLL  * atan2f(-az, ax) * RAD2DEG;
+  pitch = SIGN_PITCH * atan2f(am[1], am[0]) * RAD2DEG;
+  roll  = SIGN_ROLL  * atan2f(-am[2], am[0]) * RAD2DEG;
   yawOff = pitchOff = rollOff = 0;
   resetWindow();
-  Serial.printf("# CALIBRATED bias gx=%+.2f gy=%+.2f gz=%+.2f (%ld samples)\n",
-                bias[0], bias[1], bias[2], n);
+
+  Serial.printf("# CALIBRATED bias gx=%+.2f gy=%+.2f gz=%+.2f temp=%.1fC (%ld samples)\n",
+                gm[0], gm[1], gm[2], tm, n);
   nextUs = micros();
 }
 
@@ -186,6 +267,12 @@ void sendFrame() {
   for (const char *p = body; *p; p++) cs ^= (uint8_t)*p;
   Serial.printf("$%s*%02X\n", body, cs);
   seq++;
+}
+
+void printBias() {
+  Serial.printf("# BIAS T=%.1fC gx=%+.2f gy=%+.2f gz=%+.2f slope gx=%+.4f gy=%+.4f gz=%+.4f dps/C\n",
+                tempNow, biasAt(0), biasAt(1), biasAt(2),
+                kSlope[0], kSlope[1], kSlope[2]);
 }
 
 // ---------- Commands from the laptop ----------
@@ -205,7 +292,7 @@ void handleCommands() {
 void setup() {
   Serial.begin(115200);
   delay(1000);
-  Serial.println("# Head Tracker Stage 3c: stillness bias + auto-center");
+  Serial.println("# Head Tracker Stage 3d: temperature-compensated bias");
 
   Wire.begin(21, 22);
   Wire.setClock(400000);
@@ -216,6 +303,7 @@ void setup() {
   writeReg(0x1B, 0x08);
   writeReg(0x1C, 0x00);
 
+  warmUp();
   calibrate();
   Serial.println("# STREAMING. Send 'r' to recenter, 'c' to recalibrate");
 }
@@ -228,19 +316,17 @@ void loop() {
   if ((int32_t)(nowUs - nextUs) < 0) return;
   nextUs += SAMPLE_US;
 
-  float a[3], g[3];
-  if (!readSample(a, g)) {
+  float a[3], g[3], T = 0;
+  if (!readSample(a, g, T)) {
     i2cErrors++;
     return;
   }
+  tempNow = T;
 
   integrate(a, g);
-  updateBias(a, g);
+  updateWindow(a, g, T);
   sampleN++;
 
   if (sampleN % STREAM_EVERY == 0) sendFrame();
-
-  if (sampleN % 2000 == 0) {  // every 10 seconds
-    Serial.printf("# BIAS gx=%+.2f gy=%+.2f gz=%+.2f\n", bias[0], bias[1], bias[2]);
-  }
+  if (sampleN % 2000 == 0) printBias();
 }
