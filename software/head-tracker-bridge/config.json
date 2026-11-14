@@ -1,6 +1,9 @@
 {
   "autoCenter": true,
   "deadZoneDeg": 6,
-  "centerRate": 0.2,
-  "stillRangeDeg": 0.5
+  "centerRate": 0.35,
+  "stillRangeDeg": 3,
+  "yawGain": 1.5,
+  "pitchGain": 1.0,
+  "rollGain": 1.0
 }

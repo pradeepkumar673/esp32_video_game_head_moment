@@ -22,12 +22,18 @@ const DEFAULTS = {
   deadZoneDeg: 5,
   centerRate: 0.2,
   stillRangeDeg: 0.5,
+  yawGain: 1.0,
+  pitchGain: 1.0,
+  rollGain: 1.0,
 };
 
 const LIMITS = {
   deadZoneDeg: [0, 20],
   centerRate: [0, 1],
   stillRangeDeg: [0.1, 3],
+  yawGain: [0.5, 3],
+  pitchGain: [0.5, 3],
+  rollGain: [0.5, 3],
 };
 
 let cfg = { ...DEFAULTS };
@@ -247,9 +253,9 @@ function onFrame(raw) {
   }
 
   out = {
-    yaw: raw.yaw - center.yaw,
-    pitch: raw.pitch - center.pitch,
-    roll: raw.roll - center.roll,
+    yaw: (raw.yaw - center.yaw) * cfg.yawGain,
+    pitch: (raw.pitch - center.pitch) * cfg.pitchGain,
+    roll: (raw.roll - center.roll) * cfg.rollGain,
   };
   sendToOpenTrack(out.yaw, out.pitch, out.roll);
   lastFrameAt = Date.now();
