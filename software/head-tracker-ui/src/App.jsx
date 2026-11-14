@@ -1,7 +1,7 @@
 import { useTracker } from './useTracker';
 import Head3D from './Head3D';
 
-const RANGE = 90; // degrees shown at the end of each bar
+const RANGE = 90;
 
 function Axis({ label, value }) {
   const pct = Math.max(-1, Math.min(1, value / RANGE)) * 50;
@@ -47,35 +47,38 @@ export default function App() {
         <section className="panel stage">
           <Head3D yaw={tracking.yaw} pitch={tracking.pitch} roll={tracking.roll} />
         </section>
-        <section className="panel readouts">
-          <h2>Orientation</h2>
-          <Axis label="Yaw" value={tracking.yaw} />
-          <Axis label="Pitch" value={tracking.pitch} />
-          <Axis label="Roll" value={tracking.roll} />
-          <button className="primary" onClick={recenter} disabled={!fresh}>
-            Recenter
-          </button>
-          <p className="hint">Look straight ahead, then press Recenter to set that as the center.</p>
-        </section>
 
-        <section className="panel">
-          <h2>Device</h2>
-          <dl>
-            <dt>Port</dt><dd>{bridge.port || '—'}</dd>
-            <dt>Rate</dt><dd>{tracking.rate} Hz</dd>
-            <dt>Frames</dt><dd>{bridge.frames ?? 0}</dd>
-            <dt>Sent to OpenTrack</dt><dd>{bridge.sent ?? 0}</dd>
-            <dt>Bad checksums</dt><dd>{bridge.badChecksum ?? 0}</dd>
-          </dl>
-        </section>
+        <div className="side">
+          <section className="panel">
+            <h2>Orientation</h2>
+            <Axis label="Yaw" value={tracking.yaw} />
+            <Axis label="Pitch" value={tracking.pitch} />
+            <Axis label="Roll" value={tracking.roll} />
+            <button className="primary" onClick={recenter} disabled={!fresh}>
+              Recenter
+            </button>
+            <p className="hint">Look straight ahead, then press Recenter to set that as the center.</p>
+          </section>
 
-        <section className="panel">
-          <h2>Events</h2>
-          {events.length === 0 && <p className="hint">No events yet.</p>}
-          <ul>
-            {events.map((e, i) => <li key={i}>{e}</li>)}
-          </ul>
-        </section>
+          <section className="panel">
+            <h2>Device</h2>
+            <dl>
+              <dt>Port</dt><dd>{bridge.port || '—'}</dd>
+              <dt>Rate</dt><dd>{tracking.rate} Hz</dd>
+              <dt>Frames</dt><dd>{bridge.frames ?? 0}</dd>
+              <dt>Sent to OpenTrack</dt><dd>{bridge.sent ?? 0}</dd>
+              <dt>Bad checksums</dt><dd>{bridge.badChecksum ?? 0}</dd>
+            </dl>
+          </section>
+
+          <section className="panel">
+            <h2>Events</h2>
+            {events.length === 0 && <p className="hint">No events yet.</p>}
+            <ul>
+              {events.map((e, i) => <li key={i}>{e}</li>)}
+            </ul>
+          </section>
+        </div>
       </main>
     </div>
   );

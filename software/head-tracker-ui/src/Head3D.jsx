@@ -1,17 +1,40 @@
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { useGLTF, Environment } from '@react-three/drei';
-import { Suspense, useEffect, useRef } from 'react';
+import { Suspense, useEffect, useMemo, useRef } from 'react';
+import * as THREE from 'three';
 
 const DEG = Math.PI / 180;
 
-// Flip any axis to -1 if the head moves the wrong way when you test it.
-const FLIP = { yaw: -1, pitch: 1, roll: -1 };
+// Flip any axis to -1 if the head moves the wrong way.
+const FLIP = { yaw: -1, pitch: -1, roll: -1 };
+
+// Camera settings: the head's bounding sphere fills about 80% of the frame height.
+const FOV = 35;
+const MARGIN = 1.70;
 
 function HeadModel({ yaw, pitch, roll }) {
   const { scene } = useGLTF('/models/head.glb');
+  const { camera } = useThree();
   const group = useRef();
   const target = useRef({ yaw, pitch, roll });
   target.current = { yaw, pitch, roll };
+
+  // Scale the model so its bounding sphere has radius 1, centered at the origin
+  const fit = useMemo(() => {
+    const box = new THREE.Box3().setFromObject(scene);
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const s = 1 / sphere.radius;
+    const offset = [-sphere.center.x * s, -sphere.center.y * s, -sphere.center.z * s];
+    return { s, offset };
+  }, [scene]);
+
+  // Move the camera back far enough to see the whole sphere
+  useEffect(() => {
+    const halfFov = (FOV / 2) * DEG;
+    const dist = (1 / Math.sin(halfFov)) * MARGIN;
+    camera.position.set(0, 0, dist);
+    camera.lookAt(0, 0, 0);
+  }, [camera]);
 
   useEffect(() => {
     if (group.current) group.current.rotation.order = 'YXZ';
@@ -21,7 +44,7 @@ function HeadModel({ yaw, pitch, roll }) {
     const g = group.current;
     if (!g) return;
     const t = target.current;
-    const k = 1 - Math.exp(-dt * 12); // higher = snappier
+    const k = 1 - Math.exp(-dt * 12);
     g.rotation.y += (FLIP.yaw * t.yaw * DEG - g.rotation.y) * k;
     g.rotation.x += (FLIP.pitch * t.pitch * DEG - g.rotation.x) * k;
     g.rotation.z += (FLIP.roll * t.roll * DEG - g.rotation.z) * k;
@@ -29,14 +52,14 @@ function HeadModel({ yaw, pitch, roll }) {
 
   return (
     <group ref={group}>
-      <primitive object={scene} />
+      <primitive object={scene} position={fit.offset} scale={fit.s} />
     </group>
   );
 }
 
 export default function Head3D({ yaw, pitch, roll }) {
   return (
-    <Canvas camera={{ position: [0, 0, 2.2], fov: 35 }}>
+    <Canvas camera={{ fov: FOV, near: 0.1, far: 100 }}>
       <color attach="background" args={['#1b1b19']} />
       <ambientLight intensity={0.5} />
       <directionalLight position={[2, 3, 4]} intensity={1.4} />
@@ -49,4 +72,3 @@ export default function Head3D({ yaw, pitch, roll }) {
 }
 
 useGLTF.preload('/models/head.glb');
-
